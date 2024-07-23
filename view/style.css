@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.links { 
+	@apply flex flex-col space-y-3 p-3 [&>*]:bg-[#5FD3BC] [&>*]:p-2 font-bold text-[#0B2822] [&>*]:rounded-3xl
+}

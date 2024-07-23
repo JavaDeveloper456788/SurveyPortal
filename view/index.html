@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8" />
+	<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Survey Portal</title>
+
+	<!--Import Pinecone Router-->
+	<script src="https://cdn.jsdelivr.net/npm/pinecone-router@4.2.x/dist/router.min.js"></script>
+
+	<!--Import Alpine.js-->
+	<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+	<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+	<div id="main" class="min-h-screen bg-[#f7f9f4]" x-data="appState">
+		<template x-route="/" x-handler="home" x-template.preload="/views/home.html"></template>
+		<template x-route="/login" x-handler="loginPage" x-template.preload="/views/login.html"></template>
+		<template x-route="notfound" x-template.preload="/views/404.html"></template>
+
+		<div id="app"></div>
+	</div>
+
+	<script>
+		let appState = ({
+			SURVEY_QUESTION: '',
+			SURVEY_ANSWER_1: '',
+			SURVEY_ANSWER_2: '',
+			waiting: false,
+            email: '',
+            password: '',
+			hasErrors: false,
+			errors: [],
+			authToken: '',
+			user: null,
+			selectedOption: '',
+			entryStep: 1,
+			showData: true,
+			apiBaseUrl: 'http://localhost:8080',
+			chart: null,
+
+			init() {
+				const that = this;
+				this.getSurveyData();
+
+				window.addEventListener('popstate', function(event) {
+					if (that.entryStep > 1) {
+						that.entryStep = 1;
+						that.selectedOption = '';
+
+						that.chart?.destroy()
+						that.chart = null;
+					}
+				});
+			},
+
+			home(context) {
+                const token = window.localStorage.getItem('token')
+                if (! token) {
+                    return context.redirect('/login')
+                }
+
+				this.authToken = token;
+				this.user = JSON.parse(localStorage.getItem('user'));
+			},
+
+			loginPage(context) {
+				const token = window.localStorage.getItem('token')
+                if (token) {
+                    return context.redirect('/')
+                }
+			},
+
+            async login(event) {
+				this.hasErrors = false;
+
+				const data = new FormData();
+				data.append('email', this.email)
+				data.append('password', this.password)
+
+                const login = await fetch(`${this.apiBaseUrl}/api/login`, {
+					method: 'post',
+					body: data,
+				})
+
+				response = await login.json();
+				if (! login.ok) {
+					this.errors = [response.message];
+					this.hasErrors = true;
+				}
+
+				if (response.token) {
+					localStorage.setItem('token', response.token)
+					localStorage.setItem('user', JSON.stringify(response.user))
+					localStorage.setItem('survey_data', JSON.stringify(response.survey_data))
+
+					this.getSurveyData();
+					return window.PineconeRouter.context.navigate('/')
+				}
+            },
+
+			async logout() {
+				this.authToken = null;
+				this.user = null;
+				localStorage.removeItem('user');
+				localStorage.removeItem('token');
+				this.entryStep = 1;
+				this.selectedOption = '';
+
+				return  window.PineconeRouter.context.navigate('/login')
+			},
+
+			async submitResponse() {
+				this.hasErrors = false;
+				if (! this.selectedOption) {
+					this.hasErrors = true;
+					this.errors = ['Please select an option'];
+					
+					return;
+				}
+				
+				try {
+					this.waiting = true;
+					const formData = new FormData();
+					formData.append('option', this.selectedOption)
+					const request = await fetch(`${this.apiBaseUrl}/api/surveys`, {
+						method: 'post',
+						body: formData,
+						headers: { Authorization: `Bearer ${this.authToken}` },
+					})
+	
+					const response = await request.json();
+					if (! request.ok) {
+						this.waiting = false;
+						this.hasErrors = true;
+						this.errors = [response.message || 'Something went wrong, please try later.']
+	
+						return;
+					}
+	
+					this.waiting = false;
+					this.entryStep++;
+				} catch (e) {
+					this.hasErrors = true;
+					this.waiting = false;
+					this.errors = ['Something went wrong, please try later.']
+				}
+			},
+
+			async showResponse() {
+				if (! this.showData) {
+					this.showData = true;
+					return;
+				}
+
+				this.waiting = true;
+				const request = await fetch(`${this.apiBaseUrl}/api/surveys/survey-answers-count`, {
+					headers: { Authorization: `Bearer ${this.authToken}` },
+				})
+
+				this.waiting = false;
+				const response = await request.json();
+
+				const answer1 = response.data[this.SURVEY_ANSWER_1] || 0;
+				const answer2 = response.data[this.SURVEY_ANSWER_2] || 0;
+
+				setTimeout(() => {
+					const ctx = document.getElementById('entryChart')
+					this.chart = new Chart(ctx, {
+						type: 'doughnut',
+						options: {
+							radius: '75%',
+							cutout: '65%',
+							plugins: {
+								legend: {
+									display: false
+								},
+							},
+							hover: {mode: null},
+						},
+						data: {
+							labels: [this.SURVEY_ANSWER_1, this.SURVEY_ANSWER_2],
+							datasets: [{
+								data: [answer1, answer2],
+								backgroundColor: [
+									'rgba(83, 135, 189, 1)', // blue
+									'rgba(205, 184, 125, 1)', // yellow
+								],
+								borderWidth: 1
+							}]
+						}
+					});
+				}, 500);
+
+				this.entryStep++;
+			},
+
+			async hideResponse() {
+				this.showData = false;
+			},
+
+			getSurveyData() {
+				const surveyData = JSON.parse(localStorage.getItem('survey_data'))
+
+				this.SURVEY_QUESTION = surveyData.question;
+				this.SURVEY_ANSWER_1 = surveyData.answer1;
+				this.SURVEY_ANSWER_2 = surveyData.answer2;
+			}
+		})
+
+		document.addEventListener('alpine:initialized', () => {
+			window.PineconeRouter.settings.basePath = '/'
+			window.PineconeRouter.settings.hash = false; // use hash routing
+		});
+
+		document.addEventListener('fetch-error', (err) => console.error(err));
+	</script>
+
+	<script type="module" src="/main.js"></script>
+</body>
+
+</html>
